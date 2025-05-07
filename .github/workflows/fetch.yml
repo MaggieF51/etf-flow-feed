@@ -1,49 +1,54 @@
-name: fetch-etf
+name: fetch-etf         # 工作流名称，随意
 
+# ❶ 触发条件：每天 UTC 23:15（北京 07:15）自动运行，也可以手动点 “Run workflow”
 on:
   schedule:
-    # 每天 UTC 23:15（北京时间 07:15）自动跑一次
     - cron: '15 23 * * *'
-  workflow_dispatch:      # 允许你点按钮手动触发
+  workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
     defaults:
       run:
-        shell: bash        # 指定统一用 bash，避免 /bin/sh 的差异
+        shell: bash          # 统一用 bash，避免 /bin/sh 的语法坑
 
     steps:
-      # 1. 拉下当前仓库
-      - uses: actions/checkout@v4
+    # ❷ 把当前仓库拉到 runner
+    - uses: actions/checkout@v4
 
-      # 2. 抓取 Farside 页面并提取“Total”列最后一个数字
-      - name: grab farside
-        run: |
-          set -e
+    # ❸ 抓取 Farside，当天 “Total” 列最后一格的数字
+    - name: grab farside
+      run: |
+        set -euo pipefail
 
-          # 下载页面
-          curl -fsSL https://farside.co.uk/btc/ -o page.html
+        # ---- 下载网页（加 UA/Referer 绕过 403）----
+        curl -sL \
+          -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36' \
+          -H 'Referer: https://farside.co.uk/' \
+          https://farside.co.uk/btc/ -o page.html
 
-          # 当天日期，如 “07 May 2025”
-          TODAY=$(date +"%d %b %Y")
+        # ---- 取今天日期，如 “07 May 2025” ----
+        TODAY_0="$(date -u '+%d %b %Y')"   # 07 May 2025
+        TODAY_1="$(date -u '+%-d %b %Y')"  # 7 May 2025（去掉前导 0，保险）
 
-          # awk 以 </tr> 为记录分隔符；匹配当天行后打印并退出
-          LINE=$(awk -v RS='</tr>' -v today="$TODAY" '$0 ~ today {print; exit}' page.html)
+        # ---- 把含日期那一行揪出来，再截最后 <td> ----
+        ROW=$(grep -iE "${TODAY_0}|${TODAY_1}" -m1 page.html || true)
 
-          # 从这行里抓所有 “>数字<” 或 “>-数字<”，取最后一个
-          FLOW=$(grep -oE '>-?[0-9]+([.][0-9]+)?<' <<<"$LINE" | tail -1 | tr -d '<>')
+        if [[ -n "$ROW" ]]; then
+          # 取该行最后一个数字；可能有负号和小数
+          FLOW=$(echo "$ROW" | grep -Po '(-?[0-9]+(\.[0-9]+)?)</td>\s*</tr>' \
+                          | grep -Po '-?[0-9]+(\.[0-9]+)?' | tail -1)
+        fi
+        [[ -z "${FLOW:-}" ]] && FLOW=0   # 抓不到就设 0
 
-          # 若为空则置 0
-          [[ -z "$FLOW" ]] && FLOW=0
+        echo "{\"flow\":${FLOW}}" > netflow.json
+        cat netflow.json                # 打到日志里方便确认
 
-          echo "{\"flow\":${FLOW}}" > netflow.json
-          echo "Fetched flow = ${FLOW}"
-
-      # 3. 推送结果回 main，让 GitHub Pages 重新部署
-      - name: push to pages
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .
-          publish_branch: main
+    # ❹ 把新生成的 netflow.json 推回 main，触发 GitHub Pages 重新部署
+    - name: push to pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: .
+        publish_branch: main
