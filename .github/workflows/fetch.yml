@@ -1,0 +1,59 @@
+name: fetch-etf
+
+on:
+  schedule:
+    # 每天 UTC 23:15（北京时间 07:15）自动跑一次
+    - cron:  '15 23 * * *'
+  workflow_dispatch:   # 支持手动触发
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # 强制用 bash，才能用 set -euo pipefail
+        shell: bash
+
+    steps:
+      # 1. 把仓库拉下来
+      - uses: actions/checkout@v4
+
+      # 2. 抓 Farside，带浏览器 UA，然后用 awk+grep 拿当日 Total 列
+      - name: grab farside
+        run: |
+          set -euo pipefail
+
+          # 下载页面，伪装成 Chrome 浏览器
+          curl -s \
+            -A "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36" \
+            https://farside.co.uk/btc/ -o page.html
+
+          # 格式化今天的日期，比如 "06 May 2025"
+          TODAY=$(date +'%d %b %Y')
+
+          # 拿到当天那一行最后一个 <td> 里的数字（允许负数、小数），删掉逗号
+          FLOW=$(
+            awk 'BEGIN { RS="</tr>" }
+                $0 ~ "'"$TODAY"'" {
+                  # 先把这一块提取出来，再用 grep 抓所有 ">数字<"，取最后一个
+                  printf "%s", $0
+                }' page.html \
+            | grep -Po '>(-?[0-9,]+(\.[0-9]+)?)<' \
+            | tail -1 \
+            | tr -d ',<>'
+          )
+
+          # 如果没匹配到，就当 0
+          [[ -z "${FLOW// }" ]] && FLOW=0
+
+          # 写到 netflow.json 并打印
+          echo "{\"flow\":${FLOW}}" > netflow.json
+          cat netflow.json
+
+      # 3. 推送回 main，触发 GitHub Pages 重新部署
+      - name: push to pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          publish_branch: main
