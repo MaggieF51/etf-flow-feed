@@ -1,20 +1,44 @@
+name: fetch-etf
+
+on:
+  schedule:
+    # 每天 UTC 23:15（北京时间 07:15）自动运行
+    - cron: '15 23 * * *'
+  workflow_dispatch:   # 支持手动触发
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 拉下当前代码
+      - uses: actions/checkout@v4
+
+      # 2. 抓取 Farside 页面并提取当日 Total 列
       - name: grab farside
         run: |
+          # 下载页面
           curl -s https://farside.co.uk/btc/ -o page.html
 
-          # 取第一行最新日期所在 <tr>，再提取最后一个 <td> 的数字
-          FLOW=$(grep -Po '<tr><td[^>]*>[0-9]{2} [A-Z][a-z]{2} 20[0-9]{2}.*?<\/tr>' page.html \
-                 | head -1 \
-                 | sed -E 's/.*<td[^>]*>([-0-9.()]+)<\/td><\/tr>.*/\1/' \
-                 | tr -d '(),')
+          # 提取当天日期 (如 "06 May 2025") 所在的那一行，并拿到最后一个单元格的数字
+          FLOW=$(
+            awk 'BEGIN{RS="</tr>"} /'"$(date +'%d %b %Y')"'/ {print; exit}' page.html \
+            | grep -Po '>(-?[0-9]+(\.[0-9]+)?)<' \
+            | tail -1 \
+            | tr -d '<>'
+          )
 
+          # 如果没取到，就置为 0
           [[ -z "$FLOW" ]] && FLOW=0
+
+          # 写入并打印
           echo "{\"flow\":${FLOW}}" > netflow.json
           cat netflow.json
 
- - name: push to pages
+      # 3. 推送结果到 main 分支，让 GitHub Pages 重新部署
+      - name: push to pages
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: .
-          publish_branch: main      # 关键：推回 main 分支
+          publish_branch: main
