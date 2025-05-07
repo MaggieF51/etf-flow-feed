@@ -1,41 +1,46 @@
+# .github/workflows/fetch.yml
 name: fetch-etf
+
+# 给工作流写入分支的权限
+permissions:
+  contents: write
 
 on:
   schedule:
-    # 每天 UTC 23:15（北京时间 07:15）自动运行
-    - cron: '15 23 * * *'
-  workflow_dispatch:   # 支持手动触发
+    - cron: '15 23 * * *'     # 每天 UTC 23:15（北京时间 07:15）
+  workflow_dispatch:        # 支持手动触发
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 拉下当前代码
+      # 1. 拉取代码
       - uses: actions/checkout@v4
 
-      # 2. 抓取 Farside 页面并提取当日 Total 列
+      # 2. 抓取 Farside 表格并抽出当日 Total 列最右侧数值
       - name: grab farside
         run: |
-          # 下载页面
           curl -s https://farside.co.uk/btc/ -o page.html
 
-          # 提取当天日期 (如 "06 May 2025") 所在的那一行，并拿到最后一个单元格的数字
           FLOW=$(
+            # 按 </tr> 分块，每块里找包含今天日期的一块，拿这整块：
             awk 'BEGIN{RS="</tr>"} /'"$(date +'%d %b %Y')"'/ {print; exit}' page.html \
+            # 用正则匹配所有形如 >数字< 的单元格，取最后一个
             | grep -Po '>(-?[0-9]+(\.[0-9]+)?)<' \
             | tail -1 \
+            # 去掉尖括号
             | tr -d '<>'
           )
 
-          # 如果没取到，就置为 0
+          # 如果没取到，就给 0
           [[ -z "$FLOW" ]] && FLOW=0
 
-          # 写入并打印
+          # 写入文件并打印
           echo "{\"flow\":${FLOW}}" > netflow.json
           cat netflow.json
 
-      # 3. 推送结果到 main 分支，让 GitHub Pages 重新部署
+      # 3. 推送到 main 分支，让 GitHub Pages 重新部署
       - name: push to pages
         uses: peaceiris/actions-gh-pages@v4
         with:
