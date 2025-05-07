@@ -1,46 +1,47 @@
-# .github/workflows/fetch.yml
 name: fetch-etf
-
-# 给工作流写入分支的权限
-permissions:
-  contents: write
 
 on:
   schedule:
-    - cron: '15 23 * * *'     # 每天 UTC 23:15（北京时间 07:15）
-  workflow_dispatch:        # 支持手动触发
+    # 每天 UTC 23:15（北京时间 07:15）自动运行
+    - cron: '15 23 * * *'
+  workflow_dispatch:   # 支持手动触发
 
 jobs:
   run:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. 拉取代码
+      # 1. 拉下当前代码
       - uses: actions/checkout@v4
 
-      # 2. 抓取 Farside 表格并抽出当日 Total 列最右侧数值
+      # 2. 抓取 Farside 页面并提取当日 Total 列
       - name: grab farside
+        # 明确用 bash 解析多行脚本
+        shell: bash
         run: |
+          # 下载页面
           curl -s https://farside.co.uk/btc/ -o page.html
 
+          # 当天日期，格式如 "06 May 2025"
+          TODAY=$(date +"%d %b %Y")
+
+          # 找到包含当天日期的那一行（以 </tr> 为分隔符），
+          # 从中提取所有形如 >123.45< 或 >-67.8< 的数字，取最后一个（Total 列）
           FLOW=$(
-            # 按 </tr> 分块，每块里找包含今天日期的一块，拿这整块：
-            awk 'BEGIN{RS="</tr>"} /'"$(date +'%d %b %Y')"'/ {print; exit}' page.html \
-            # 用正则匹配所有形如 >数字< 的单元格，取最后一个
+            awk 'BEGIN{RS="</tr>"} $0 ~ ENVIRON["TODAY"] {print; exit}' page.html \
             | grep -Po '>(-?[0-9]+(\.[0-9]+)?)<' \
             | tail -1 \
-            # 去掉尖括号
             | tr -d '<>'
           )
 
-          # 如果没取到，就给 0
+          # 如果没取到，就置为 0
           [[ -z "$FLOW" ]] && FLOW=0
 
-          # 写入文件并打印
+          # 写入 JSON 并输出到日志
           echo "{\"flow\":${FLOW}}" > netflow.json
           cat netflow.json
 
-      # 3. 推送到 main 分支，让 GitHub Pages 重新部署
+      # 3. 推送结果到 main 分支，让 GitHub Pages 重新部署
       - name: push to pages
         uses: peaceiris/actions-gh-pages@v4
         with:
