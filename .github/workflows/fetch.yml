@@ -2,46 +2,45 @@ name: fetch-etf
 
 on:
   schedule:
-    # 每天 UTC 23:15（北京时间 07:15）自动运行
+    # 每天 UTC 23:15（北京时间 07:15）自动跑一次
     - cron: '15 23 * * *'
-  workflow_dispatch:   # 支持手动触发
+  workflow_dispatch:      # 允许你点按钮手动触发
 
 jobs:
   run:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash        # 指定统一用 bash，避免 /bin/sh 的差异
 
     steps:
-      # 1. 拉下当前代码
+      # 1. 拉下当前仓库
       - uses: actions/checkout@v4
 
-      # 2. 抓取 Farside 页面并提取当日 Total 列
+      # 2. 抓取 Farside 页面并提取“Total”列最后一个数字
       - name: grab farside
-        # 明确用 bash 解析多行脚本
-        shell: bash
         run: |
-          # 下载页面
-          curl -s https://farside.co.uk/btc/ -o page.html
+          set -e
 
-          # 当天日期，格式如 "06 May 2025"
+          # 下载页面
+          curl -fsSL https://farside.co.uk/btc/ -o page.html
+
+          # 当天日期，如 “07 May 2025”
           TODAY=$(date +"%d %b %Y")
 
-          # 找到包含当天日期的那一行（以 </tr> 为分隔符），
-          # 从中提取所有形如 >123.45< 或 >-67.8< 的数字，取最后一个（Total 列）
-          FLOW=$(
-            awk 'BEGIN{RS="</tr>"} $0 ~ ENVIRON["TODAY"] {print; exit}' page.html \
-            | grep -Po '>(-?[0-9]+(\.[0-9]+)?)<' \
-            | tail -1 \
-            | tr -d '<>'
-          )
+          # awk 以 </tr> 为记录分隔符；匹配当天行后打印并退出
+          LINE=$(awk -v RS='</tr>' -v today="$TODAY" '$0 ~ today {print; exit}' page.html)
 
-          # 如果没取到，就置为 0
+          # 从这行里抓所有 “>数字<” 或 “>-数字<”，取最后一个
+          FLOW=$(grep -oE '>-?[0-9]+([.][0-9]+)?<' <<<"$LINE" | tail -1 | tr -d '<>')
+
+          # 若为空则置 0
           [[ -z "$FLOW" ]] && FLOW=0
 
-          # 写入 JSON 并输出到日志
           echo "{\"flow\":${FLOW}}" > netflow.json
-          cat netflow.json
+          echo "Fetched flow = ${FLOW}"
 
-      # 3. 推送结果到 main 分支，让 GitHub Pages 重新部署
+      # 3. 推送结果回 main，让 GitHub Pages 重新部署
       - name: push to pages
         uses: peaceiris/actions-gh-pages@v4
         with:
